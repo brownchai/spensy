@@ -1,4 +1,4 @@
-# Statement Parser - Transaction Extractor
+# Spensy - Statement Parser & Transaction Extractor
 
 A web application that extracts transaction details from bank statement images or PDFs and exports them to CSV format.
 
