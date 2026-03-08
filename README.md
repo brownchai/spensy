@@ -119,14 +119,18 @@ Returns `202 Accepted` immediately. Results are POSTed to the `callback_url` whe
 ```json
 {
   "status": "processing",
+  "request_id": "a1b2c3d4-...",
   "message": "Files received. Results will be POSTed to your callback URL when processing completes."
 }
 ```
+
+The `request_id` is included in the callback payload so you can correlate the response to the original request.
 
 **Callback payload** (POSTed to your `callback_url`) — on success:
 
 ```json
 {
+  "request_id": "a1b2c3d4-...",
   "status": "completed",
   "files_processed": 1,
   "transaction_count": 12,
@@ -144,6 +148,7 @@ Returns `202 Accepted` immediately. Results are POSTed to the `callback_url` whe
 
 ```json
 {
+  "request_id": "a1b2c3d4-...",
   "status": "error",
   "message": "An error occurred while processing the uploaded files."
 }
@@ -231,7 +236,7 @@ pip install -r requirements.txt
 
 Create a `.env` file in the project root:
 
-```
+```env
 OPENAI_API_KEY=sk-...
 ```
 
