@@ -87,35 +87,45 @@ def extract_transactions_from_pdf(file_path):
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
+    files = request.files.getlist('files')
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files provided'}), 400
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
+    if len(files) > 5:
+        return jsonify({'error': 'Maximum 5 files allowed at once'}), 400
 
-    file_ext = os.path.splitext(file.filename)[1]
     supported_exts = {'.pdf'} | set(IMAGE_MEDIA_TYPES.keys())
-    if file_ext.lower() not in supported_exts:
-        return jsonify({'error': 'Unsupported file type. Use PDF or image files.'}), 400
-
-    unique_filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+    all_transactions = []
+    saved_paths = []
 
     try:
-        file.save(file_path)
+        for file in files:
+            if file.filename == '':
+                continue
 
-        if file_ext.lower() == '.pdf':
-            transactions = extract_transactions_from_pdf(file_path)
-        else:
-            transactions = extract_transactions_from_image(file_path, file_ext)
+            file_ext = os.path.splitext(file.filename)[1]
+            if file_ext.lower() not in supported_exts:
+                return jsonify({'error': f'Unsupported file type: {file.filename}. Use PDF or image files.'}), 400
 
-        os.remove(file_path)
-        return jsonify({'success': True, 'transactions': transactions}), 200
+            unique_filename = f"{uuid.uuid4()}{file_ext}"
+            file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+            file.save(file_path)
+            saved_paths.append((file_path, file_ext))
+
+        for file_path, file_ext in saved_paths:
+            if file_ext.lower() == '.pdf':
+                transactions = extract_transactions_from_pdf(file_path)
+            else:
+                transactions = extract_transactions_from_image(file_path, file_ext)
+            all_transactions.extend(transactions)
+            os.remove(file_path)
+
+        return jsonify({'success': True, 'transactions': all_transactions}), 200
 
     except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        for file_path, _ in saved_paths:
+            if os.path.exists(file_path):
+                os.remove(file_path)
         return jsonify({'error': str(e)}), 500
 
 
