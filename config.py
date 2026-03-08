@@ -26,9 +26,5 @@ TRANSACTION_DATE_PATTERNS = [
 
 TRANSACTION_AMOUNT_PATTERN = r'[~$£€]?\s*(\d+[\d,.]*?(?:\.\d{2})?)'
 
-# CSV Export Configuration
-CSV_EXPORT_FOLDER = 'exports'
-CSV_DELIMITER = ','
-
 # CORS Configuration
 CORS_ORIGINS = ['http://localhost:8000', 'http://localhost:3000', 'http://127.0.0.1:8000']

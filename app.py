@@ -1,14 +1,13 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from openai import OpenAI
 import base64
-import csv
 import json
 import logging
 import os
-from datetime import datetime
-from io import BytesIO, StringIO
+import threading
+import requests
 import uuid
 
 from config import MAX_FILE_SIZE_MB, FLASK_PORT
@@ -102,10 +101,53 @@ def cleanup(paths):
             os.remove(path)
 
 
+def process_and_callback(saved_paths, file_count, callback_url):
+    """Process files in background and POST results to callback_url."""
+    try:
+        all_transactions = []
+        for file_path, file_ext in saved_paths:
+            if file_ext.lower() == '.pdf':
+                transactions = extract_transactions_from_pdf(file_path)
+            else:
+                transactions = extract_transactions_from_image(file_path, file_ext)
+            all_transactions.extend(transactions)
+            os.remove(file_path)
+
+        payload = {
+            "status": "completed",
+            "files_processed": file_count,
+            "transaction_count": len(all_transactions),
+            "transactions": all_transactions,
+        }
+    except Exception:
+        logger.exception("Error processing files for callback")
+        cleanup([p for p, _ in saved_paths])
+        payload = {
+            "status": "error",
+            "message": "An error occurred while processing the uploaded files.",
+        }
+
+    try:
+        requests.post(callback_url, json=payload, timeout=30)
+    except Exception:
+        logger.exception("Failed to deliver callback to %s", callback_url)
+
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle multi-file upload and transaction extraction (up to 5 files)."""
-    # Accept both 'files' and 'files[]' field names
+    """Handle multi-file upload and transaction extraction (up to 5 files).
+
+    Form fields:
+      files       - one or more statement files (PDF or image)
+      callback_url - optional URL to POST results to asynchronously
+
+    Synchronous response (no callback_url):
+      200 { status, files_processed, transaction_count, transactions }
+
+    Async response (callback_url provided):
+      202 { status: "processing", message }
+      Then POSTs { status, files_processed, transaction_count, transactions } to callback_url.
+    """
     files = request.files.getlist('files') or request.files.getlist('files[]')
     files = [f for f in files if f.filename != '']
 
@@ -115,9 +157,10 @@ def upload_file():
     if len(files) > 5:
         return jsonify({'error': 'Maximum 5 files allowed at once'}), 400
 
+    callback_url = request.form.get('callback_url', '').strip() or None
+
     supported_exts = {'.pdf'} | set(IMAGE_MEDIA_TYPES.keys())
 
-    # Validate all files before saving any
     for file in files:
         file_ext = os.path.splitext(file.filename)[1].lower()
         if file_ext not in supported_exts:
@@ -137,6 +180,18 @@ def upload_file():
             file.save(file_path)
             saved_paths.append((file_path, file_ext))
 
+        if callback_url:
+            thread = threading.Thread(
+                target=process_and_callback,
+                args=(saved_paths, len(files), callback_url),
+                daemon=True,
+            )
+            thread.start()
+            return jsonify({
+                "status": "processing",
+                "message": "Files received. Results will be POSTed to your callback URL when processing completes.",
+            }), 202
+
         all_transactions = []
         for file_path, file_ext in saved_paths:
             if file_ext.lower() == '.pdf':
@@ -146,41 +201,17 @@ def upload_file():
             all_transactions.extend(transactions)
             os.remove(file_path)
 
-        return jsonify({'success': True, 'transactions': all_transactions}), 200
+        return jsonify({
+            "status": "completed",
+            "files_processed": len(files),
+            "transaction_count": len(all_transactions),
+            "transactions": all_transactions,
+        }), 200
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error processing upload")
         cleanup([p for p, _ in saved_paths])
         return jsonify({'error': 'An error occurred while processing your files. Please try again.'}), 500
-
-
-@app.route('/export-csv', methods=['POST'])
-def export_csv():
-    """Export transactions list to a CSV file."""
-    try:
-        data = request.json
-        transactions = data.get('transactions', [])
-
-        if not transactions:
-            return jsonify({'error': 'No transactions to export'}), 400
-
-        output = StringIO()
-        writer = csv.DictWriter(output, fieldnames=['date', 'description', 'amount'])
-        writer.writeheader()
-        writer.writerows(transactions)
-
-        csv_bytes = BytesIO(output.getvalue().encode())
-        csv_bytes.seek(0)
-
-        return send_file(
-            csv_bytes,
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        )
-    except Exception as e:
-        logger.exception("Error exporting CSV")
-        return jsonify({'error': 'An error occurred while exporting. Please try again.'}), 500
 
 
 @app.route('/health', methods=['GET'])
