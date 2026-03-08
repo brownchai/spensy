@@ -5,18 +5,26 @@ from openai import OpenAI
 import base64
 import csv
 import json
+import logging
 import os
 from datetime import datetime
 from io import BytesIO, StringIO
 import uuid
+
+from config import MAX_FILE_SIZE_MB, FLASK_PORT
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 client = OpenAI()
 
@@ -43,6 +51,7 @@ IMAGE_MEDIA_TYPES = {
 
 
 def extract_transactions_from_image(file_path, file_ext):
+    """Extract transactions from an image file using GPT-4o vision."""
     with open(file_path, 'rb') as f:
         image_data = base64.standard_b64encode(f.read()).decode('utf-8')
 
@@ -66,6 +75,7 @@ def extract_transactions_from_image(file_path, file_ext):
 
 
 def extract_transactions_from_pdf(file_path):
+    """Extract transactions from a PDF file using GPT-4o."""
     import PyPDF2
     text = ""
     with open(file_path, 'rb') as f:
@@ -85,33 +95,49 @@ def extract_transactions_from_pdf(file_path):
     return result.get("transactions", [])
 
 
+def cleanup(paths):
+    """Delete a list of file paths, ignoring missing files."""
+    for path in paths:
+        if os.path.exists(path):
+            os.remove(path)
+
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    files = request.files.getlist('files')
-    if not files or all(f.filename == '' for f in files):
+    """Handle multi-file upload and transaction extraction (up to 5 files)."""
+    # Accept both 'files' and 'files[]' field names
+    files = request.files.getlist('files') or request.files.getlist('files[]')
+    files = [f for f in files if f.filename != '']
+
+    if not files:
         return jsonify({'error': 'No files provided'}), 400
 
     if len(files) > 5:
         return jsonify({'error': 'Maximum 5 files allowed at once'}), 400
 
     supported_exts = {'.pdf'} | set(IMAGE_MEDIA_TYPES.keys())
-    all_transactions = []
-    saved_paths = []
 
+    # Validate all files before saving any
+    for file in files:
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in supported_exts:
+            return jsonify({'error': f'Unsupported file type: {file.filename}. Use PDF or image files.'}), 400
+
+        file.seek(0, 2)
+        size = file.tell()
+        file.seek(0)
+        if size > MAX_FILE_SIZE_BYTES:
+            return jsonify({'error': f'{file.filename} exceeds the {MAX_FILE_SIZE_MB}MB size limit.'}), 400
+
+    saved_paths = []
     try:
         for file in files:
-            if file.filename == '':
-                continue
-
             file_ext = os.path.splitext(file.filename)[1]
-            if file_ext.lower() not in supported_exts:
-                return jsonify({'error': f'Unsupported file type: {file.filename}. Use PDF or image files.'}), 400
-
-            unique_filename = f"{uuid.uuid4()}{file_ext}"
-            file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+            file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}{file_ext}")
             file.save(file_path)
             saved_paths.append((file_path, file_ext))
 
+        all_transactions = []
         for file_path, file_ext in saved_paths:
             if file_ext.lower() == '.pdf':
                 transactions = extract_transactions_from_pdf(file_path)
@@ -123,14 +149,14 @@ def upload_file():
         return jsonify({'success': True, 'transactions': all_transactions}), 200
 
     except Exception as e:
-        for file_path, _ in saved_paths:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        return jsonify({'error': str(e)}), 500
+        logger.exception("Error processing upload")
+        cleanup([p for p, _ in saved_paths])
+        return jsonify({'error': 'An error occurred while processing your files. Please try again.'}), 500
 
 
 @app.route('/export-csv', methods=['POST'])
 def export_csv():
+    """Export transactions list to a CSV file."""
     try:
         data = request.json
         transactions = data.get('transactions', [])
@@ -153,13 +179,15 @@ def export_csv():
             download_name=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.exception("Error exporting CSV")
+        return jsonify({'error': 'An error occurred while exporting. Please try again.'}), 500
 
 
 @app.route('/health', methods=['GET'])
 def health():
+    """Health check endpoint."""
     return jsonify({'status': 'healthy'}), 200
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=FLASK_PORT)

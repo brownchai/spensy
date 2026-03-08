@@ -332,7 +332,7 @@
                 <div class="upload-hint">or click to browse — PDF or Image, up to 5 files</div>
                 <button class="button" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">Choose Files</button>
             </div>
-            <input type="file" id="fileInput" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.bmp,.gif" multiple>
+            <input type="file" id="fileInput" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.bmp,.gif,.webp,image/webp" multiple>
             <div class="file-list" id="fileList"></div>
             <div class="process-btn-wrap" id="processBtnWrap" style="display:none;">
                 <button class="button" id="processBtn">⚡ Extract Transactions</button>
@@ -390,6 +390,7 @@
         let currentTransactions = [];
         let selectedFiles = [];
 
+        const API_BASE = 'http://localhost:5000';
         const VALID_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/bmp', 'image/gif', 'image/webp'];
 
         uploadArea.addEventListener('click', () => fileInput.click());
@@ -458,11 +459,13 @@
             resultsSection.classList.remove('show');
             processBtn.disabled = true;
 
+            // Snapshot files before async operation to avoid race condition
+            const filesSnapshot = [...selectedFiles];
             const formData = new FormData();
-            selectedFiles.forEach(file => formData.append('files', file));
+            filesSnapshot.forEach(file => formData.append('files', file));
 
             try {
-                const response = await fetch('http://localhost:5001/upload', {
+                const response = await fetch(`${API_BASE}/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -471,21 +474,21 @@
 
                 if (response.ok && data.success) {
                     currentTransactions = data.transactions;
-                    displayResults(data);
+                    displayResults(data, filesSnapshot);
                 } else {
                     showError(data.error || 'Error processing files');
                 }
             } catch (error) {
-                showError(`Error: ${error.message}. Make sure the Flask server is running on http://localhost:5001`);
+                showError(`Error: ${error.message}. Make sure the Flask server is running on ${API_BASE}`);
             } finally {
                 loading.style.display = 'none';
                 processBtn.disabled = false;
             }
         }
 
-        function displayResults(data) {
+        function displayResults(data, filesSnapshot) {
             const count = data.transactions.length;
-            const fileWord = selectedFiles.length > 1 ? ` across ${selectedFiles.length} files` : '';
+            const fileWord = filesSnapshot.length > 1 ? ` across ${filesSnapshot.length} files` : '';
             transactionCount.textContent = `${count} transaction${count !== 1 ? 's' : ''}${fileWord}`;
 
             transactionsBody.innerHTML = '';
@@ -516,7 +519,7 @@
                 return;
             }
             try {
-                const response = await fetch('http://localhost:5001/export-csv', {
+                const response = await fetch(`${API_BASE}/export-csv`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ transactions: currentTransactions })
