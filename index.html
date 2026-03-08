@@ -238,6 +238,54 @@
             display: block;
         }
 
+        .file-list {
+            margin-top: 12px;
+            text-align: left;
+        }
+
+        .file-list-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #f0f2ff;
+            border: 1px solid #c7d2fe;
+            border-radius: 5px;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #333;
+        }
+
+        .file-list-item .remove-file {
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+            line-height: 1;
+        }
+
+        .file-list-item .remove-file:hover {
+            color: #c33;
+        }
+
+        .file-count-badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            border-radius: 12px;
+            padding: 2px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .process-btn-wrap {
+            margin-top: 16px;
+            text-align: center;
+        }
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -280,11 +328,15 @@
         <div class="upload-section">
             <div class="upload-area" id="uploadArea">
                 <div class="upload-icon">📄</div>
-                <div class="upload-text">Drag and drop your statement here</div>
-                <div class="upload-hint">or click to browse (PDF or Image)</div>
-                <button class="button">Choose File</button>
+                <div class="upload-text">Drag and drop your statements here</div>
+                <div class="upload-hint">or click to browse — PDF or Image, up to 5 files</div>
+                <button class="button" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">Choose Files</button>
             </div>
-            <input type="file" id="fileInput" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.bmp,.gif">
+            <input type="file" id="fileInput" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.bmp,.gif,.webp,image/webp" multiple>
+            <div class="file-list" id="fileList"></div>
+            <div class="process-btn-wrap" id="processBtnWrap" style="display:none;">
+                <button class="button" id="processBtn">⚡ Extract Transactions</button>
+            </div>
         </div>
 
         <div class="loading" id="loading">
@@ -323,6 +375,9 @@
     <script>
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const processBtnWrap = document.getElementById('processBtnWrap');
+        const processBtn = document.getElementById('processBtn');
         const loading = document.getElementById('loading');
         const resultsSection = document.getElementById('resultsSection');
         const errorMessage = document.getElementById('errorMessage');
@@ -333,55 +388,84 @@
         const extractedTextDiv = document.getElementById('extractedText');
 
         let currentTransactions = [];
+        let selectedFiles = [];
 
-        // Upload area clicks
+        const API_BASE = 'http://localhost:5000';
+        const VALID_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/bmp', 'image/gif', 'image/webp'];
+
         uploadArea.addEventListener('click', () => fileInput.click());
 
-        // File input change
         fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                processFile(file);
-            }
+            addFiles(Array.from(e.target.files));
+            fileInput.value = '';
         });
 
-        // Drag and drop
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
         });
 
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
+        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
 
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            const file = e.dataTransfer.files[0];
-            if (file) {
-                processFile(file);
-            }
+            addFiles(Array.from(e.dataTransfer.files));
         });
 
-        async function processFile(file) {
+        function addFiles(newFiles) {
             errorMessage.classList.remove('show');
-            
-            // Validate file type
-            const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/bmp', 'image/gif'];
-            if (!validTypes.includes(file.type)) {
-                showError('Invalid file type. Please upload a PDF or image file.');
-                return;
+            for (const file of newFiles) {
+                if (selectedFiles.length >= 5) {
+                    showError('Maximum 5 files allowed. Remove a file to add more.');
+                    break;
+                }
+                if (!VALID_TYPES.includes(file.type)) {
+                    showError(`Unsupported file type: ${file.name}`);
+                    continue;
+                }
+                if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) continue;
+                selectedFiles.push(file);
             }
+            renderFileList();
+        }
 
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            renderFileList();
+        }
+
+        function renderFileList() {
+            fileList.innerHTML = '';
+            selectedFiles.forEach((file, i) => {
+                const item = document.createElement('div');
+                item.className = 'file-list-item';
+                item.innerHTML = `
+                    <span>📄 ${escapeHtml(file.name)} <span style="color:#999;">(${(file.size/1024).toFixed(1)} KB)</span></span>
+                    <button class="remove-file" onclick="removeFile(${i})">✕</button>
+                `;
+                fileList.appendChild(item);
+            });
+            processBtnWrap.style.display = selectedFiles.length > 0 ? 'block' : 'none';
+            processBtn.textContent = `⚡ Extract Transactions${selectedFiles.length > 1 ? ` from ${selectedFiles.length} files` : ''}`;
+        }
+
+        processBtn.addEventListener('click', processFiles);
+
+        async function processFiles() {
+            if (selectedFiles.length === 0) return;
+            errorMessage.classList.remove('show');
             loading.style.display = 'block';
             resultsSection.classList.remove('show');
+            processBtn.disabled = true;
 
+            // Snapshot files before async operation to avoid race condition
+            const filesSnapshot = [...selectedFiles];
             const formData = new FormData();
-            formData.append('file', file);
+            filesSnapshot.forEach(file => formData.append('files', file));
 
             try {
-                const response = await fetch('http://localhost:5001/upload', {
+                const response = await fetch(`${API_BASE}/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -390,30 +474,25 @@
 
                 if (response.ok && data.success) {
                     currentTransactions = data.transactions;
-                    displayResults(data);
+                    displayResults(data, filesSnapshot);
                 } else {
-                    showError(data.error || 'Error processing file');
+                    showError(data.error || 'Error processing files');
                 }
             } catch (error) {
-                showError(`Error: ${error.message}. Make sure the Flask server is running on http://localhost:5001`);
+                showError(`Error: ${error.message}. Make sure the Flask server is running on ${API_BASE}`);
             } finally {
                 loading.style.display = 'none';
+                processBtn.disabled = false;
             }
         }
 
-        function displayResults(data) {
-            // Update transaction count
-            transactionCount.textContent = `${data.transactions.length} transaction${data.transactions.length !== 1 ? 's' : ''}`;
+        function displayResults(data, filesSnapshot) {
+            const count = data.transactions.length;
+            const fileWord = filesSnapshot.length > 1 ? ` across ${filesSnapshot.length} files` : '';
+            transactionCount.textContent = `${count} transaction${count !== 1 ? 's' : ''}${fileWord}`;
 
-            // Show extracted text if available
-            if (data.extracted_text) {
-                extractedTextDiv.textContent = 'Extracted Text: ' + data.extracted_text;
-                extractedTextDiv.style.display = 'block';
-            }
-
-            // Populate table
             transactionsBody.innerHTML = '';
-            if (data.transactions.length === 0) {
+            if (count === 0) {
                 transactionsBody.innerHTML = '<tr class="empty-message"><td colspan="3">No transactions found in the statement</td></tr>';
             } else {
                 data.transactions.forEach(tx => {
@@ -426,7 +505,6 @@
                     transactionsBody.appendChild(row);
                 });
             }
-
             resultsSection.classList.add('show');
         }
 
@@ -440,13 +518,10 @@
                 showError('No transactions to export');
                 return;
             }
-
             try {
-                const response = await fetch('http://localhost:5001/export-csv', {
+                const response = await fetch(`${API_BASE}/export-csv`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ transactions: currentTransactions })
                 });
 
@@ -467,22 +542,18 @@
         });
 
         resetBtn.addEventListener('click', () => {
-            fileInput.value = '';
+            selectedFiles = [];
             currentTransactions = [];
+            fileList.innerHTML = '';
+            processBtnWrap.style.display = 'none';
             resultsSection.classList.remove('show');
             errorMessage.classList.remove('show');
             extractedTextDiv.style.display = 'none';
         });
 
         function escapeHtml(text) {
-            const map = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#039;'
-            };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
         }
     </script>
 </body>
