@@ -3,7 +3,7 @@
 # Flask Configuration
 FLASK_ENV = 'development'
 DEBUG = True
-FLASK_PORT = 5000
+FLASK_PORT = 5050
 
 # File Upload Configuration
 MAX_FILE_SIZE_MB = 50
